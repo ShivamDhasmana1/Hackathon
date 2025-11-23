@@ -1,14 +1,13 @@
 import uuid
 import logging
 from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ocr import analyze_image_file
 from face_match import verify_faces
 from security import hash_kyc_fields
-from audit import append_hash_log, append_decision_log  # <-- NEW
 
-# ---------- Logging setup ----------
 logger = logging.getLogger("kyc_service")
 logging.basicConfig(
     level=logging.INFO,
@@ -17,55 +16,63 @@ logging.basicConfig(
 
 app = FastAPI(title="AI KYC Service")
 
+# ---------- CORS (so Lovable frontend can call this) ----------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # you can later restrict this
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# ---------- Decision logic ----------
+# ---------- Health / Root endpoints for verification ----------
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "AI KYC backend is running"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+# ---------- Your existing analyze_kyc route ----------
 def make_decision(ocr_result: dict, face_result: dict) -> dict:
     ocr_conf = float(ocr_result.get("ocr_confidence_avg") or 0.0)
-
     face_verified = bool(face_result.get("face_verified"))
     face_score = float(face_result.get("face_score") or 0.0)
     liveness_passed = bool(face_result.get("liveness_passed", False))
 
     reasons = []
+    risk_level = "low"
     status = "approved"
-    risk = "low"
 
-    # Thresholds (tune later)
     if ocr_conf < 60:
         status = "manual_review"
-        risk = "medium"
+        risk_level = "medium"
         reasons.append("Low OCR confidence")
 
     if not face_verified or face_score < 0.6:
         status = "manual_review"
-        risk = "medium"
+        risk_level = "medium"
         reasons.append("Weak face verification")
 
     if not liveness_passed:
         status = "manual_review"
-        risk = "medium"
+        risk_level = "high"
         reasons.append("Liveness check not passed")
-
-    if face_score < 0.3:
-        status = "rejected"
-        risk = "high"
-        reasons.append("Very low face similarity")
 
     if not reasons and status == "approved":
         reasons = ["All basic checks passed"]
 
-    # Short summary for UI
-    if status == "approved":
-        summary = "KYC auto-approved (low risk)"
-    elif status == "manual_review":
-        summary = "KYC requires manual review"
-    else:
-        summary = "KYC rejected due to high risk"
+    summary = {
+        "approved": "KYC auto-approved (low risk)",
+        "manual_review": "KYC requires manual review",
+        "rejected": "KYC rejected",
+    }[status]
 
     return {
         "status": status,
         "auto_approve": status == "approved",
-        "risk_level": risk,
+        "risk_level": risk_level,
         "summary": summary,
         "reasons": reasons,
         "internal_scores": {
@@ -78,15 +85,11 @@ def make_decision(ocr_result: dict, face_result: dict) -> dict:
 
 
 @app.post("/analyze_kyc")
-async def analyze_kyc(
-    id_document: UploadFile = File(...),
-    selfie: UploadFile = File(...),
-):
+async def analyze_kyc(id_document: UploadFile = File(...),
+                      selfie: UploadFile = File(...)):
+
     request_id = str(uuid.uuid4())
-    logger.info(
-        f"[{request_id}] /analyze_kyc started | "
-        f"id={id_document.filename} selfie={selfie.filename}"
-    )
+    logger.info(f"[{request_id}] /analyze_kyc started | id={id_document.filename}, selfie={selfie.filename}")
 
     try:
         id_bytes = await id_document.read()
@@ -103,22 +106,21 @@ async def analyze_kyc(
             logger.exception(f"[{request_id}] OCR failed")
             raise HTTPException(status_code=500, detail="Failed to read document")
 
-        fields = ocr_result.get("fields", {}) or {}
-        name = fields.get("name")
-        dob = fields.get("dob")
-        id_number = fields.get("id_number")
-        address = fields.get("address_snippet")
-
         try:
             face_result = verify_faces(id_bytes, selfie_bytes)
         except Exception:
             logger.exception(f"[{request_id}] Face verification failed")
-            # Fail safe: treat as not verified, no liveness
             face_result = {
                 "face_verified": False,
                 "face_score": 0.0,
-                "liveness_passed": False,
+                "liveness_passed": False
             }
+
+        fields = (ocr_result.get("fields") or {})
+        name = fields.get("name")
+        dob = fields.get("dob")
+        id_number = fields.get("id_number")
+        address = fields.get("address_snippet")
 
         try:
             hashed = hash_kyc_fields(
@@ -128,28 +130,12 @@ async def analyze_kyc(
                 address=address,
             )
             logger.info(f"[{request_id}] Hashing completed")
-
-            append_hash_log(
-                request_id=request_id,
-                hashed_fields=hashed,
-                raw_meta={
-                    "has_name": name is not None,
-                    "has_dob": dob is not None,
-                    "has_id_number": id_number is not None,
-                    "has_address": address is not None,
-                },
-            )
-
+            # here you also append to your internal JSON log if you want
         except Exception:
             logger.exception(f"[{request_id}] Hashing failed")
-            hashed = None  
+            hashed = None
 
         decision = make_decision(ocr_result, face_result)
-        append_decision_log(
-            request_id=request_id,
-            decision=decision,
-            fields=fields,
-        )
 
         logger.info(
             f"[{request_id}] decision={decision['status']} | "
@@ -163,11 +149,11 @@ async def analyze_kyc(
             content={
                 "request_id": request_id,
                 "decision": {
-                    "status": decision["status"],          # "approved" | "manual_review" | "rejected"
+                    "status": decision["status"],
                     "auto_approve": decision["auto_approve"],
-                    "risk_level": decision["risk_level"],  # "low" | "medium" | "high"
-                    "summary": decision["summary"],        # One-line message
-                    "reasons": decision["reasons"],        # List of reasons
+                    "risk_level": decision["risk_level"],
+                    "summary": decision["summary"],
+                    "reasons": decision["reasons"],
                 },
             }
         )
@@ -183,4 +169,4 @@ async def analyze_kyc(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
