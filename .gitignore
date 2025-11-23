@@ -1,0 +1,105 @@
+# Virtual environment
+venv/
+.venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.pda
+*.pkl
+
+# ML model weights + deepface cache
+*.h5
+*.hdf5
+*.ckpt
+*.tflite
+*.onnx
+~deepface/
+~deepface_cache/
+~/.deepface/
+
+# Tensorflow logs
+logs/
+*.log
+*.tfevents.*
+
+# OCR engine output
+*.traineddata
+tessdata/
+*.box
+
+tmp/
+temp/
+data/
+runtime/
+.cache/
+.cache-private/
+
+# CSV / Results / Testing batches
+results/
+*.csv
+*.tsv
+
+# Hash storage (internal only)
+audit_logs/
+audit/
+hash_store/
+*.json
+
+.DS_Store
+Thumbs.db
+desktop.ini
+.icloud
+.Spotlight-V100
+.Trashes
+
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+
+*.tar
+Dockerfile~
+docker-compose.override.yml
+
+
+*.env
+.env.*
+secrets/
+keys/
+*.pem
+*.crt
+
+
+samples/
+uploads/
+*id*.jpg
+*selfie*.jpg
+*.jpeg
+*.png
+*.bmp
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+build/
+.next/
+out/
+*.map
+
+# Lock files (optional)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
